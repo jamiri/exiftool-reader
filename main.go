@@ -10,11 +10,6 @@ import (
 	"strings"
 )
 
-type TagInfo struct {
-	XMLName xml.Name `xml:"taginfo"`
-	Table   []Table  `xml:"table"`
-}
-
 type Table struct {
 	Name string `xml:"name,attr"`
 
@@ -50,32 +45,8 @@ func getTags(w http.ResponseWriter, r *http.Request) {
 
 	controlCh := scannerRun()
 
-	//select {
-	//case table := <-controlCh.Tables:
-	//	for tag := range controlCh.Tags {
-	//		wData := fmt.Sprintf("{\n\"writeable\": %s,\n", tag.Writable)
-	//		wData = wData + fmt.Sprintf("\"path\": %s:%s,\n", table, tag.Name)
-	//		wData = wData + fmt.Sprintf("\"group\": %s,\n", table)
-	//		wData = wData + fmt.Sprintf("\"description\":{\n")
-	//		tagAppendix := ","
-	//		for i, desc := range tag.Descs {
-	//			if i == len(tag.Descs)-1 {
-	//				tagAppendix = ""
-	//			}
-	//			wData = wData + fmt.Sprintf("\"%s\": \"%s\"%s\n", desc.Lang, desc.Value, tagAppendix)
-	//		}
-	//		wData = wData + "},\n"
-	//		tagAppendix = ","
-	//		io.Copy(w, strings.NewReader(wData))
-	//		if f, ok := w.(http.Flusher); ok {
-	//			f.Flush()
-	//		}
-	//	}
-	//}
-
-	//for table := range controlCh.Tables {
 	for tag := range controlCh.Tags {
-		wData := fmt.Sprintf("{\n\"writeable\": %s,\n", tag.Writable)
+		wData := fmt.Sprintf(",\n{\n\"writeable\": %s,\n", tag.Writable)
 		wData = wData + fmt.Sprintf("\"path\": %s:%s,\n", tag.TableName, tag.Name)
 		wData = wData + fmt.Sprintf("\"group\": %s,\n", tag.TableName)
 		wData = wData + fmt.Sprintf("\"description\":{\n")
@@ -86,28 +57,25 @@ func getTags(w http.ResponseWriter, r *http.Request) {
 			}
 			wData = wData + fmt.Sprintf("\"%s\": \"%s\"%s\n", desc.Lang, desc.Value, tagAppendix)
 		}
-		wData = wData + "},\n"
+		wData = wData + "}"
 		tagAppendix = ","
 		io.Copy(w, strings.NewReader(wData))
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
 	}
-	<-controlCh.done
+	io.Copy(w, strings.NewReader("\n]\n}"))
 }
 
 type TagReaderCh struct {
-	//Tables <-chan string
 	Tags <-chan *Tag
 	errs <-chan error
 	done <-chan struct{}
 }
 
 func scannerRun() *TagReaderCh {
-	//tableChan := make(chan string)
 	tagChan := make(chan *Tag)
 	errsChan := make(chan error)
-	done := make(chan struct{})
 
 	var currentTable string
 	var tagData *Tag
@@ -132,7 +100,6 @@ func scannerRun() *TagReaderCh {
 			// Start reading table
 			if strings.Contains(l, "<table") {
 				currentTable, _ = readTableData(l)
-				//tableChan <- currentTable
 				continue
 			}
 
@@ -168,28 +135,15 @@ func scannerRun() *TagReaderCh {
 			fmt.Println(tagData)
 		}
 		cmd.Wait()
+		close(tagChan)
 	}()
 	return &TagReaderCh{
-		//Tables: tableChan,
 		Tags: tagChan,
 		errs: errsChan,
-		done: done,
 	}
 }
 
 func readTableData(inp string) (string, error) {
-	type Table struct {
-		Name string `xml:"name,attr"`
-	}
-	xmlTag := []byte(fmt.Sprintf("%s </table>", inp))
-	table := &Table{}
-	if err := xml.Unmarshal(xmlTag, table); err != nil {
-		return "", err
-	}
-	return table.Name, nil
-}
-
-func readTagsData(inp string) (string, error) {
 	type Table struct {
 		Name string `xml:"name,attr"`
 	}
@@ -229,7 +183,3 @@ func (tReader *TagReader) Parse() (*Tag, error) {
 	tagData.TableName = tReader.TableName
 	return tagData, nil
 }
-
-//func (tReader *TagReader) End() {
-//
-//}
