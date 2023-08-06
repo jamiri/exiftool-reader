@@ -48,11 +48,13 @@ type Tag struct {
 }
 
 func main() {
-	tInfo := &TagInfo{
-		//Table: make([]Table, 0),
-	}
-	_ = xml.Unmarshal([]byte(sample), tInfo)
-	fmt.Println(tInfo)
+	scannerRun()
+
+	//tInfo := &TagInfo{
+	//	//Table: make([]Table, 0),
+	//}
+	//_ = xml.Unmarshal([]byte(sample), tInfo)
+	//fmt.Println(tInfo)
 }
 
 func scannerRun() {
@@ -64,9 +66,85 @@ func scannerRun() {
 
 	scanner := bufio.NewScanner(stdout)
 	scanner.Split(bufio.ScanLines)
+
+	var currentTable string
+	var tagData *Tag
+	var tagReader *TagReader
 	for scanner.Scan() {
-		m := scanner.Text()
-		fmt.Println(m)
+		l := scanner.Text()
+
+		if strings.Contains(l, "<table") {
+			currentTable, _ = readTableData(l)
+			continue
+		}
+
+		if strings.Contains(l, "<tag") {
+			tagReader = &TagReader{}
+			tagReader.Begin(l)
+			continue
+		}
+
+		if strings.Contains(l, "</tag>") {
+			tagReader.AddLine(l)
+			tagData, _ = tagReader.Parse()
+			tagReader = nil
+		}
+
+		if tagReader != nil {
+			tagReader.AddLine(l)
+		}
+
+		fmt.Println(currentTable)
+		fmt.Println(tagData)
 	}
 	cmd.Wait()
 }
+
+func readTableData(inp string) (string, error) {
+	type Table struct {
+		Name string `xml:"name,attr"`
+	}
+	xmlTag := []byte(fmt.Sprintf("%s </table>", inp))
+	table := &Table{}
+	if err := xml.Unmarshal(xmlTag, table); err != nil {
+		return "", err
+	}
+	return table.Name, nil
+}
+
+func readTagsData(inp string) (string, error) {
+	type Table struct {
+		Name string `xml:"name,attr"`
+	}
+	xmlTag := []byte(fmt.Sprintf("%s </table>", inp))
+	table := &Table{}
+	if err := xml.Unmarshal(xmlTag, table); err != nil {
+		return "", err
+	}
+	return table.Name, nil
+}
+
+type TagReader struct {
+	Data string
+}
+
+func (tReader *TagReader) Begin(line string) {
+	tReader.Data = line
+}
+
+func (tReader *TagReader) AddLine(line string) {
+	tReader.Data = fmt.Sprintf("%s\n%s", tReader.Data, line)
+}
+
+func (tReader *TagReader) Parse() (*Tag, error) {
+	xmlData := []byte(tReader.Data)
+	tagData := &Tag{}
+	if err := xml.Unmarshal(xmlData, tagData); err != nil {
+		return nil, err
+	}
+	return tagData, nil
+}
+
+//func (tReader *TagReader) End() {
+//
+//}
