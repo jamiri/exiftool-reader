@@ -70,24 +70,40 @@ func scannerRun() {
 	var currentTable string
 	var tagData *Tag
 	var tagReader *TagReader
+	tableChan := make(chan string)
+	tagChan := make(chan *Tag)
 	for scanner.Scan() {
 		l := scanner.Text()
 
+		// Start reading table
 		if strings.Contains(l, "<table") {
 			currentTable, _ = readTableData(l)
+			tableChan <- currentTable
 			continue
 		}
 
+		// End a table
+		if strings.Contains(l, "</table") {
+			currentTable = ""
+			tagReader = nil
+			tagData = nil
+			continue
+		}
+
+		// Start reading a tag
 		if strings.Contains(l, "<tag") {
 			tagReader = &TagReader{}
 			tagReader.Begin(l)
 			continue
 		}
 
+		// Parse a completed tag
 		if strings.Contains(l, "</tag>") {
 			tagReader.AddLine(l)
 			tagData, _ = tagReader.Parse()
+			tagChan <- tagData
 			tagReader = nil
+			tagData = nil
 		}
 
 		if tagReader != nil {
