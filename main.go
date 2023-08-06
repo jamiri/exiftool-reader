@@ -4,8 +4,11 @@ import (
 	"bufio"
 	"encoding/xml"
 	"fmt"
+	"io"
+	"net/http"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 const sample = `<?xml version='1.0' encoding='UTF-8'?>
@@ -48,8 +51,9 @@ type Tag struct {
 }
 
 func main() {
-	scannerRun()
-
+	//scannerRun()
+	http.HandleFunc("/tags", getTags)
+	http.ListenAndServe("localhost:8889", nil)
 	//tInfo := &TagInfo{
 	//	//Table: make([]Table, 0),
 	//}
@@ -57,7 +61,66 @@ func main() {
 	//fmt.Println(tInfo)
 }
 
-func scannerRun() {
+func getTags(w http.ResponseWriter, r *http.Request) {
+	jsonData := "{\"tags\": [\n"
+	w.Header().Set("Content-Type", "application/octet-stream")
+	io.Copy(w, strings.NewReader(jsonData))
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+
+	controlCh := scannerRun()
+
+	for table := range controlCh.Tables {
+		for tag := range controlCh.Tags {
+			wData := fmt.Sprintf("{\n\"writeable\": %s,\n", tag.Writable)
+			wData = wData + fmt.Sprintf("\"path\": %s:%s,\n", table, tag.Name)
+			wData = wData + fmt.Sprintf("\"group\": %s,\n", table)
+			wData = wData + fmt.Sprintf("\"description\":{\n")
+			tagAppendix := ","
+			for i, desc := range tag.Descs {
+				if i == len(tag.Descs)-1 {
+					tagAppendix = ""
+				}
+				wData = wData + fmt.Sprintf("\"%s\": \"%s\"%s\n", desc.Lang, desc.Value, tagAppendix)
+			}
+			wData = wData + "},\n"
+			tagAppendix = ","
+			io.Copy(w, strings.NewReader(wData))
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+
+		<-controlCh.done
+	}
+
+	//w.Write([]byte("version 1"))
+	//io.WriteString(w, "version 1")
+	time.Sleep(time.Second * 2)
+
+	//w.Write([]byte("version 2"))
+	io.Copy(w, strings.NewReader("version 2"))
+	//io.WriteString(w, "version 2")
+}
+
+type TagReaderCh struct {
+	Tables <-chan string
+	Tags   <-chan *Tag
+	errs   <-chan error
+	done   <-chan struct{}
+}
+
+func scannerRun() *TagReaderCh {
+	tableChan := make(chan string)
+	tagChan := make(chan *Tag)
+	errsChan := make(chan error)
+	done := make(chan struct{})
+
+	var currentTable string
+	var tagData *Tag
+	var tagReader *TagReader
+
 	args := "-listx"
 	cmd := exec.Command("exiftool", strings.Split(args, " ")...)
 
@@ -66,54 +129,57 @@ func scannerRun() {
 
 	scanner := bufio.NewScanner(stdout)
 	scanner.Split(bufio.ScanLines)
+	go func() {
+		for scanner.Scan() {
+			l := scanner.Text()
 
-	var currentTable string
-	var tagData *Tag
-	var tagReader *TagReader
-	tableChan := make(chan string)
-	tagChan := make(chan *Tag)
-	for scanner.Scan() {
-		l := scanner.Text()
+			// Start reading table
+			if strings.Contains(l, "<table") {
+				currentTable, _ = readTableData(l)
+				tableChan <- currentTable
+				continue
+			}
 
-		// Start reading table
-		if strings.Contains(l, "<table") {
-			currentTable, _ = readTableData(l)
-			tableChan <- currentTable
-			continue
+			// End a table
+			if strings.Contains(l, "</table") {
+				currentTable = ""
+				tagReader = nil
+				tagData = nil
+				continue
+			}
+
+			// Start reading a tag
+			if strings.Contains(l, "<tag") {
+				tagReader = &TagReader{}
+				tagReader.Begin(l)
+				continue
+			}
+
+			// Parse a completed tag
+			if strings.Contains(l, "</tag>") {
+				tagReader.AddLine(l)
+				tagData, _ = tagReader.Parse()
+				tagChan <- tagData
+				tagReader = nil
+				tagData = nil
+			}
+
+			if tagReader != nil {
+				tagReader.AddLine(l)
+			}
+
+			fmt.Println(currentTable)
+			fmt.Println(tagData)
 		}
+		cmd.Wait()
 
-		// End a table
-		if strings.Contains(l, "</table") {
-			currentTable = ""
-			tagReader = nil
-			tagData = nil
-			continue
-		}
-
-		// Start reading a tag
-		if strings.Contains(l, "<tag") {
-			tagReader = &TagReader{}
-			tagReader.Begin(l)
-			continue
-		}
-
-		// Parse a completed tag
-		if strings.Contains(l, "</tag>") {
-			tagReader.AddLine(l)
-			tagData, _ = tagReader.Parse()
-			tagChan <- tagData
-			tagReader = nil
-			tagData = nil
-		}
-
-		if tagReader != nil {
-			tagReader.AddLine(l)
-		}
-
-		fmt.Println(currentTable)
-		fmt.Println(tagData)
+	}()
+	return &TagReaderCh{
+		Tables: tableChan,
+		Tags:   tagChan,
+		errs:   errsChan,
+		done:   done,
 	}
-	cmd.Wait()
 }
 
 func readTableData(inp string) (string, error) {
